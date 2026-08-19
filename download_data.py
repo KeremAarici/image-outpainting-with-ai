@@ -4,7 +4,7 @@ import zipfile
 from tqdm import tqdm
 
 class DownloadProgressBar(tqdm):
-    """tqdm ile indirme ilerleme çubuğu görselleştirme"""
+    
     def update_to(self, b=1, bsize=1, tsize=None):
         if tsize is not None:
             self.total = tsize
@@ -17,24 +17,24 @@ def download_coco_val2017():
 
     os.makedirs("data", exist_ok=True)
 
-    # 1. Zip Dosyasını İndir
+    
     if not os.path.exists(zip_path):
-        print("COCO Val2017 Veri Seti İndiriliyor (~1 GB)...")
+        print("COCO Val2017 Dataset Downloading (~1 GB)...")
         with DownloadProgressBar(unit='B', unit_scale=True, miniters=1, desc="COCO Val2017") as t:
             urllib.request.urlretrieve(url, filename=zip_path, reporthook=t.update_to)
-        print("İndirme tamamlandı!")
+        print("Download Completed")
     else:
-        print("Zip dosyası zaten mevcut, indirme adımı atlandı.")
+        print("Zip file is available. The installation completed")
 
-    # 2. Zip Dosyasını Çıkart
+    
     target_dir = os.path.join(extract_path, "val2017")
     if not os.path.exists(target_dir):
-        print("Zip dosyası 'data/' dizinine çıkarılıyor...")
+        print("Extracting the zip file...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(extract_path)
-        print("Ayıklama tamamlandı!")
+        print("Extraction completed")
     else:
-        print("Veri seti zaten çıkarılmış durumda.")
+        print("The dataset has already been extracted.")
 
 if __name__ == "__main__":
     download_coco_val2017()
