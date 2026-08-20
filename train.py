@@ -31,8 +31,9 @@ def save_samples(gen, loader, epoch):
     with torch.no_grad():
         masked_img, mask, target = next(iter(loader))
         masked_img, mask, target = masked_img.to(DEVICE), mask.to(DEVICE), target.to(DEVICE)
-        
-        fake_img = gen(masked_img, mask)
+        # For Fast Conculusion
+        with torch.amp.autocast(device_type="cuda"):
+            fake_img = gen(masked_img, mask)
         
         # Denormalize [-1, 1] -> [0, 1]
         masked_img = (masked_img + 1) / 2
@@ -59,6 +60,10 @@ def train_fn():
     opt_gen = optim.Adam(gen.parameters(), lr=LEARNING_RATE, betas=(0.5, 0.999))
     opt_disc = optim.Adam(disc.parameters(), lr=LEARNING_RATE, betas=(0.5, 0.999))
 
+    # AMP Accelerator
+    scaler_gen = torch.cuda.amp.GradScaler()
+    scaler_disc = torch.cuda.amp.GradScaler()
+
     # 5=Loss func.
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
     L1_LOSS = nn.L1Loss()        # Pixel-based loss of detail
@@ -78,43 +83,48 @@ def train_fn():
             # ---------------------
             #  1. Discriminator
             # ---------------------
-            fake_img = gen(masked_img, mask)
-
-            disc_real = disc(masked_img, mask, target)
-            # Label Smoothing
-            real_labels = torch.ones_like(disc_real) * 0.9
-            loss_disc_real = BCE(disc_real, real_labels)
-
-            disc_fake = disc(masked_img, mask, fake_img.detach())
-            fake_labels = torch.zeros_like(disc_fake)
-            loss_disc_fake = BCE(disc_fake, fake_labels)
-
-            loss_disc = (loss_disc_real + loss_disc_fake) / 2
-
             opt_disc.zero_grad()
-            loss_disc.backward()
-            opt_disc.step()
+
+            # Autocast
+            with torch.amp.autocast(device_type="cuda"):
+                fake_img = gen(masked_img, mask)
+
+                disc_real = disc(masked_img, mask, target)
+                real_labels = torch.ones_like(disc_real) * 0.9
+                loss_disc_real = BCE(disc_real, real_labels)
+
+                disc_fake = disc(masked_img, mask, fake_img.detach())
+                fake_labels = torch.zeros_like(disc_fake)
+                loss_disc_fake = BCE(disc_fake, fake_labels)
+
+                loss_disc = (loss_disc_real + loss_disc_fake) / 2
+
+            # Backward pass and optimization scaler
+            scaler_disc.scale(loss_disc).backward()
+            scaler_disc.step(opt_disc)
+            scaler_disc.update()
 
             # ---------------------
             #  2. Generator
             # ---------------------
-            disc_fake_for_gen = disc(masked_img, mask, fake_img)
-            loss_gen_gan = BCE(disc_fake_for_gen, torch.ones_like(disc_fake_for_gen))
-
-            # Masked L1 Loss
-            missing_region_mask = 1.0 - mask
-            l1_global = L1_LOSS(fake_img, target)
-            l1_masked = L1_LOSS(fake_img * missing_region_mask, target * missing_region_mask)
-            loss_gen_l1 = (l1_global + 10 * l1_masked) * LAMBDA_L1
-
-            # VGG19 Perceptual Loss
-            loss_gen_perc = PERCEPTUAL_LOSS(fake_img, target) * LAMBDA_PERCEPTUAL
-
-            loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc
-
             opt_gen.zero_grad()
-            loss_gen.backward()
-            opt_gen.step()
+
+            with torch.amp.autocast(device_type="cuda"):
+                disc_fake_for_gen = disc(masked_img, mask, fake_img)
+                loss_gen_gan = BCE(disc_fake_for_gen, torch.ones_like(disc_fake_for_gen))
+
+                missing_region_mask = 1.0 - mask
+                l1_global = L1_LOSS(fake_img, target)
+                l1_masked = L1_LOSS(fake_img * missing_region_mask, target * missing_region_mask)
+                loss_gen_l1 = (l1_global + 10 * l1_masked) * LAMBDA_L1
+
+                loss_gen_perc = PERCEPTUAL_LOSS(fake_img, target) * LAMBDA_PERCEPTUAL
+
+                loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc
+
+            scaler_gen.scale(loss_gen).backward()
+            scaler_gen.step(opt_gen)
+            scaler_gen.update()
 
             loop.set_postfix(
                 D_loss=loss_disc.item(),
@@ -122,6 +132,8 @@ def train_fn():
                 L1=loss_gen_l1.item(),
                 Perc=loss_gen_perc.item()
             )
+
+
         if (epoch + 1) % 2 == 0:
             save_samples(gen, loader, epoch)
 
