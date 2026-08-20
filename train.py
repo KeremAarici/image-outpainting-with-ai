@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
-from loss import PerceptualLoss, PerceptualAndStyleLoss, FFTLoss
+from loss import PerceptualAndStyleLoss, FFTLoss
 
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
