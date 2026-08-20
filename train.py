@@ -8,15 +8,18 @@ from tqdm import tqdm
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
-from loss import PerceptualLoss
+from loss import PerceptualAndStyleLoss, FFTLoss, MaskBoundaryLoss
 
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 8          # RTX 5060 (8GB VRAM) Ideal batch sie
 LEARNING_RATE = 0.0002   # Pix2Pix original learning rate
-LAMBDA_L1 = 100         # L1 loss mass multiplier
+LAMBDA_L1 = 10         # L1 loss mass multiplier
 LAMBDA_PERCEPTUAL = 10
-NUM_EPOCHS = 20         # Total loop number
+LAMBDA_STYLE = 250       # New Texture Loss Weight
+LAMBDA_FFT = 100         # New Frequency/Sharpness Weight
+LAMBDA_BOUNDARY = 20.0   # Penalty Weight Of Boundary
+NUM_EPOCHS = 20          # Total loop number
 IMAGE_SIZE = 256
 CHECKPOINT_DIR = "checkpoints"
 SAMPLES_DIR = "samples"
@@ -67,13 +70,32 @@ def train_fn():
     # 5=Loss func.
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
     L1_LOSS = nn.L1Loss()        # Pixel-based loss of detail
-    PERCEPTUAL_LOSS = PerceptualLoss().to(DEVICE)
+    PERCEPTUAL_LOSS = PerceptualAndStyleLoss().to(DEVICE)
+    PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
+    FFT_LOSS = FFTLoss().to(DEVICE)
+    MASK_BOUNDARY_LOSS = MaskBoundaryLoss(kernel_size=9).to(DEVICE)
+
+    # =========================================================
+    # To continue your training where you left off!!!!!!!!!!!!!
+    # =========================================================
+    LOAD_MODEL = True
+    START_EPOCH = 35
+    ADDITIONAL_EPOCHS = 20
+
+    if LOAD_MODEL:
+        print("Loading the available checkpoint weights (Epoch 35)...")
+        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_35.pth"))
+        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_35.pth"))
+
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
-    for epoch in range(NUM_EPOCHS):
+    
+
+
+    for epoch in range(START_EPOCH, START_EPOCH + ADDITIONAL_EPOCHS):
         loop = tqdm(loader, leave=True)
-        loop.set_description(f"Epoch [{epoch+1}/{NUM_EPOCHS}]")
+        loop.set_description(f"Epoch [{epoch+1}/{START_EPOCH + ADDITIONAL_EPOCHS}]")
 
         for idx, (masked_img, mask, target) in enumerate(loop):
             masked_img = masked_img.to(DEVICE)
@@ -85,7 +107,7 @@ def train_fn():
             # ---------------------
             opt_disc.zero_grad()
 
-            # Autocast
+            # Autocast 1 
             with torch.amp.autocast(device_type="cuda"):
                 fake_img = gen(masked_img, mask)
 
@@ -108,34 +130,58 @@ def train_fn():
             #  2. Generator
             # ---------------------
             opt_gen.zero_grad()
-
+            # Autocast 2
             with torch.amp.autocast(device_type="cuda"):
+                # Discriminator output for generator
                 disc_fake_for_gen = disc(masked_img, mask, fake_img)
                 loss_gen_gan = BCE(disc_fake_for_gen, torch.ones_like(disc_fake_for_gen))
 
+                # L1 Loss
                 missing_region_mask = 1.0 - mask
                 l1_global = L1_LOSS(fake_img, target)
                 l1_masked = L1_LOSS(fake_img * missing_region_mask, target * missing_region_mask)
                 loss_gen_l1 = (l1_global + 10 * l1_masked) * LAMBDA_L1
 
-                loss_gen_perc = PERCEPTUAL_LOSS(fake_img, target) * LAMBDA_PERCEPTUAL
+                # Perceptual and Style Loss
+                loss_gen_perc, loss_gen_style = PERCEPTUAL_STYLE_LOSS(fake_img, target)
+                loss_gen_perc = loss_gen_perc * LAMBDA_PERCEPTUAL
+                loss_gen_style = loss_gen_style * LAMBDA_STYLE
 
-                loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc
+                # Frequency (FFT) Loss. Prevents blurring and smearing
+                loss_gen_fft = FFT_LOSS(fake_img, target) * LAMBDA_FFT
+
+                # Total Generator Loss
+                loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc + loss_gen_style + loss_gen_fft
+
+                # Sınır Hattı Geçiş Kaybı
+                loss_gen_boundary = MASK_BOUNDARY_LOSS(fake_img, target, mask) * LAMBDA_BOUNDARY
+
+                # Total Generator Loss
+                loss_gen = (
+                    loss_gen_gan + 
+                    loss_gen_l1 + 
+                    loss_gen_perc + 
+                    loss_gen_style + 
+                    loss_gen_fft + 
+                    loss_gen_boundary
+                )
 
             scaler_gen.scale(loss_gen).backward()
             scaler_gen.step(opt_gen)
             scaler_gen.update()
 
             loop.set_postfix(
-                D_loss=loss_disc.item(),
-                G_loss=loss_gen.item(),
-                L1=loss_gen_l1.item(),
-                Perc=loss_gen_perc.item()
+                D_loss=f"{loss_disc.item():.3f}",
+                G_loss=f"{loss_gen.item():.1f}",
+                L1=f"{loss_gen_l1.item():.1f}",
+                Style=f"{loss_gen_style.item():.1f}",
+                FFT=f"{loss_gen_fft.item():.1f}",
+                Bnd=f"{loss_gen_boundary.item():.1f}"
             )
 
 
         if (epoch + 1) % 2 == 0:
-            save_samples(gen, loader, epoch)
+            save_samples(gen, loader, epoch + 1)
 
 
         # Save the model weights every 5 epochs
