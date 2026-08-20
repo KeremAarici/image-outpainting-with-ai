@@ -69,7 +69,7 @@ def train_fn():
     # 5=Loss func.
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
     L1_LOSS = nn.L1Loss()        # Pixel-based loss of detail
-    PERCEPTUAL_LOSS = PerceptualLoss().to(DEVICE)
+    PERCEPTUAL_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     FFT_LOSS = FFTLoss().to(DEVICE)
 
