@@ -73,6 +73,17 @@ def train_fn():
     PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     FFT_LOSS = FFTLoss().to(DEVICE)
 
+    # =========================================================
+    # To continue your training where you left off!!!!!!!!!!!!!
+    # =========================================================
+    LOAD_MODEL = True
+
+    if LOAD_MODEL:
+        print("Loading the available checkpoint weights (Epoch 20)...")
+        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_20.pth"))
+        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_20.pth"))
+
+
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
     for epoch in range(NUM_EPOCHS):
