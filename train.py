@@ -7,13 +7,15 @@ from tqdm import tqdm
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
+from loss import PerceptualLoss
 
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 8          # RTX 5060 (8GB VRAM) Ideal batch sie
 LEARNING_RATE = 0.0002   # Pix2Pix original learning rate
 LAMBDA_L1 = 100         # L1 loss mass multiplier
-NUM_EPOCHS = 20         # Total loop number
+LAMBDA_PERCEPTUAL = 10
+NUM_EPOCHS = 25         # Total loop number
 IMAGE_SIZE = 256
 CHECKPOINT_DIR = "checkpoints"
 
@@ -36,6 +38,7 @@ def train_fn():
     # 5=Loss func.
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
     L1_LOSS = nn.L1Loss()        # Pixel-based loss of detail
+    PERCEPTUAL_LOSS = PerceptualLoss().to(DEVICE)
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
@@ -48,49 +51,50 @@ def train_fn():
             mask = mask.to(DEVICE)
             target = target.to(DEVICE)
 
-            # ==========================================
-            #   STEP A: DISCRIMINATOR TRAINING
-            # ==========================================
-            # Generator creates fake pictures
+            # ---------------------
+            #  1. Discriminator
+            # ---------------------
             fake_img = gen(masked_img, mask)
 
-            # 1. Calculating Loss Using Actual Images
             disc_real = disc(masked_img, mask, target)
             loss_disc_real = BCE(disc_real, torch.ones_like(disc_real))
 
-            # Calculating Loss Using Synthetic Images (We detach generator derivatives using .detach())
             disc_fake = disc(masked_img, mask, fake_img.detach())
             loss_disc_fake = BCE(disc_fake, torch.zeros_like(disc_fake))
 
-            # Total discriminitor loss
             loss_disc = (loss_disc_real + loss_disc_fake) / 2
 
             opt_disc.zero_grad()
             loss_disc.backward()
             opt_disc.step()
 
-            # ==========================================
-            #   STEP B: GENERATOR TRAINING
-            # ==========================================
-            # Degree of fooling the discriminator (It tries to make the fakes appear as “1”)
+            # ---------------------
+            #  2. Generator
+            # ---------------------
             disc_fake_for_gen = disc(masked_img, mask, fake_img)
             loss_gen_gan = BCE(disc_fake_for_gen, torch.ones_like(disc_fake_for_gen))
 
-            # Degree of similarity at the pixel level compared to the original target image
-            loss_gen_l1 = L1_LOSS(fake_img, target) * LAMBDA_L1
+            # Masked L1 Loss: Üretilen alana (mask == 0) 10 kat daha fazla odaklanılır
+            missing_region_mask = 1.0 - mask
+            l1_global = L1_LOSS(fake_img, target)
+            l1_masked = L1_LOSS(fake_img * missing_region_mask, target * missing_region_mask)
+            loss_gen_l1 = (l1_global + 10 * l1_masked) * LAMBDA_L1
+
+            # VGG19 Perceptual Loss
+            loss_gen_perc = PERCEPTUAL_LOSS(fake_img, target) * LAMBDA_PERCEPTUAL
 
             # Total Generator Loss
-            loss_gen = loss_gen_gan + loss_gen_l1
+            loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc
 
             opt_gen.zero_grad()
             loss_gen.backward()
             opt_gen.step()
 
-
             loop.set_postfix(
                 D_loss=loss_disc.item(),
                 G_loss=loss_gen.item(),
-                L1=loss_gen_l1.item()
+                L1=loss_gen_l1.item(),
+                Perc=loss_gen_perc.item()
             )
 
         # Save the model weights every 5 epochs

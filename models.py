@@ -40,31 +40,46 @@ class UNetGenerator(nn.Module):
         super().__init__()
         
         # --- ENCODER ---
-        # 256x256 -> 128x128
-        self.e1 = nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1) 
-        # 128x128 -> 64x64
-        self.e2 = UNetBlock(64, 128, down=True)       
-        # 64x64 -> 32x32
-        self.e3 = UNetBlock(128, 256, down=True)      
-        # 32x32 -> 16x16
-        self.e4 = UNetBlock(256, 512, down=True)      
-        # 16x16 -> 8x8 (Darboğaz / Bottleneck)
-        self.e5 = UNetBlock(512, 512, down=True)      
+        def down_block(in_c, out_c, normalize=True):
+            layers = [nn.Conv2d(in_c, out_c, kernel_size=4, stride=2, padding=1, bias=False)]
+            if normalize:
+                layers.append(nn.BatchNorm2d(out_c))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            return nn.Sequential(*layers)
+
+        self.e1 = down_block(in_channels, 64, normalize=False) # 256 -> 128
+        self.e2 = down_block(64, 128)                           # 128 -> 64
+        self.e3 = down_block(128, 256)                          # 64 -> 32
+        self.e4 = down_block(256, 512)                          # 32 -> 16
+        self.e5 = down_block(512, 512)                          # 16 -> 8
+        self.e6 = down_block(512, 512)                          # 8 -> 4
+        self.e7 = down_block(512, 512)                          # 4 -> 2
+        self.bottleneck = down_block(512, 512, normalize=False) # 2 -> 1      
 
         # --- DECODER ---
-        # 8x8 -> 16x16
-        self.d1 = UNetBlock(512, 512, down=False, use_dropout=True) 
-        # 16x16 -> 32x32 (Girdi kanalı Skip Connection yüzünden 512+512=1024 olur)
-        self.d2 = UNetBlock(1024, 256, down=False)                  
-        # 32x32 -> 64x64 (256+256 = 512)
-        self.d3 = UNetBlock(512, 128, down=False)                   
-        # 64x64 -> 128x128 (128+128 = 256)
-        self.d4 = UNetBlock(256, 64, down=False)                    
+        def up_block(in_c, out_c, dropout=False):
+            layers = [
+                nn.Upsample(scale_factor=2, mode='nearest'),
+                nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=1, bias=False),
+                nn.BatchNorm2d(out_c),
+                nn.ReLU(inplace=True)
+            ]
+            if dropout:
+                layers.append(nn.Dropout(0.5))
+            return nn.Sequential(*layers)
 
-        # 128x128 -> 256x256 (Son Katman)
+        self.d1 = up_block(512, 512, dropout=True)  # 1 -> 2
+        self.d2 = up_block(1024, 512, dropout=True) # 2 -> 4
+        self.d3 = up_block(1024, 512, dropout=True) # 4 -> 8
+        self.d4 = up_block(1024, 512)               # 8 -> 16
+        self.d5 = up_block(1024, 256)               # 16 -> 32
+        self.d6 = up_block(512, 128)                # 32 -> 64
+        self.d7 = up_block(256, 64)                 # 64 -> 128
+
         self.final = nn.Sequential(
-            nn.ConvTranspose2d(128, out_channels, kernel_size=4, stride=2, padding=1),
-            nn.Tanh() # Compress the pixels in between [-1, 1]
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Conv2d(128, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.Tanh() # Çıktıyı [-1, 1] aralığına sıkıştırır
         )
 
     def forward(self, masked_img, mask):
@@ -77,14 +92,20 @@ class UNetGenerator(nn.Module):
         e3 = self.e3(e2)
         e4 = self.e4(e3)
         e5 = self.e5(e4)
+        e6 = self.e6(e5)
+        e7 = self.e7(e6)
+        b = self.bottleneck(e7)
 
         # Decoder Flow and Skip Connections
-        d1 = self.d1(e5)
-        d2 = self.d2(torch.cat([d1, e4], dim=1)) # e4 with d1 
-        d3 = self.d3(torch.cat([d2, e3], dim=1)) # e3 with d2 
-        d4 = self.d4(torch.cat([d3, e2], dim=1)) # e2 with d3 
+        d1 = torch.cat([self.d1(b), e7], dim=1)
+        d2 = torch.cat([self.d2(d1), e6], dim=1)
+        d3 = torch.cat([self.d3(d2), e5], dim=1)
+        d4 = torch.cat([self.d4(d3), e4], dim=1)
+        d5 = torch.cat([self.d5(d4), e3], dim=1)
+        d6 = torch.cat([self.d6(d5), e2], dim=1)
+        d7 = torch.cat([self.d7(d6), e1], dim=1) 
 
-        return self.final(torch.cat([d4, e1], dim=1)) # e1 with d4 
+        return self.final(d7)
 
 
 class PatchGANDiscriminator(nn.Module):
@@ -95,7 +116,7 @@ class PatchGANDiscriminator(nn.Module):
     """
     def __init__(self, in_channels=7):
         super().__init__()
-        
+
         def block(in_c, out_c, stride=2, normalize=True):
             layers = [nn.Conv2d(in_c, out_c, kernel_size=4, stride=stride, padding=1)]
             if normalize:
@@ -104,11 +125,11 @@ class PatchGANDiscriminator(nn.Module):
             return layers
 
         self.model = nn.Sequential(
-            *block(in_channels, 64, stride=2, normalize=False), 
-            *block(64, 128, stride=2),
-            *block(128, 256, stride=2),
-            *block(256, 512, stride=1),
-            nn.Conv2d(512, 1, kernel_size=4, padding=1) 
+            *block(in_channels, 64, stride=2, normalize=False), # 256 -> 128
+            *block(64, 128, stride=2),                          # 128 -> 64
+            *block(128, 256, stride=2),                         # 64 -> 32
+            *block(256, 512, stride=1),                         # 32 -> 31
+            nn.Conv2d(512, 1, kernel_size=4, padding=1)         # 31 -> 30
         )
 
     def forward(self, masked_img, mask, image):
