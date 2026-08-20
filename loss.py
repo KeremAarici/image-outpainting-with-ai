@@ -3,22 +3,23 @@ import torch.nn as nn
 from torchvision.models import vgg19, VGG19_Weights
 
 class FFTLoss(nn.Module):
-    """Bulanıklığı engelleyen yüksek frekans (Fourier) kayıp fonksiyonu."""
     def __init__(self):
         super().__init__()
         self.l1 = nn.L1Loss()
 
     def forward(self, x, y):
-        # Transfer to the official frequency space with 2D Real FFT
-        x_fft = torch.fft.rfft2(x, norm="ortho")
-        y_fft = torch.fft.rfft2(y, norm="ortho")
-        
-        # Compare the spectrum amplitude
-        x_mag = torch.abs(x_fft)
-        y_mag = torch.abs(y_fft)
-        
-        return self.l1(x_mag, y_mag)
+        # We move the FFT calculation outside of AMP (autocast) and set it to float32 precision
+        with torch.amp.autocast(device_type="cuda", enabled=False):
+            x_fp32 = x.float()
+            y_fp32 = y.float()
 
+            x_fft = torch.fft.rfft2(x_fp32, norm="ortho")
+            y_fft = torch.fft.rfft2(y_fp32, norm="ortho")
+
+            x_mag = torch.abs(x_fft)
+            y_mag = torch.abs(y_fft)
+
+            return self.l1(x_mag, y_mag)
 class PerceptualAndStyleLoss(nn.Module):
     def __init__(self):
         super().__init__()
