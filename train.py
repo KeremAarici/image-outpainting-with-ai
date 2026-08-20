@@ -8,14 +8,16 @@ from tqdm import tqdm
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
-from loss import PerceptualLoss
+from loss import PerceptualLoss, PerceptualAndStyleLoss, FFTLoss
 
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 8          # RTX 5060 (8GB VRAM) Ideal batch sie
 LEARNING_RATE = 0.0002   # Pix2Pix original learning rate
-LAMBDA_L1 = 100         # L1 loss mass multiplier
+LAMBDA_L1 = 10         # L1 loss mass multiplier
 LAMBDA_PERCEPTUAL = 10
+LAMBDA_STYLE = 250       # New Texture Loss Weight
+LAMBDA_FFT = 100         # New Frequency/Sharpness Weight
 NUM_EPOCHS = 20         # Total loop number
 IMAGE_SIZE = 256
 CHECKPOINT_DIR = "checkpoints"
@@ -68,6 +70,8 @@ def train_fn():
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
     L1_LOSS = nn.L1Loss()        # Pixel-based loss of detail
     PERCEPTUAL_LOSS = PerceptualLoss().to(DEVICE)
+    PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
+    FFT_LOSS = FFTLoss().to(DEVICE)
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
@@ -85,7 +89,7 @@ def train_fn():
             # ---------------------
             opt_disc.zero_grad()
 
-            # Autocast
+            # Autocast 1 
             with torch.amp.autocast(device_type="cuda"):
                 fake_img = gen(masked_img, mask)
 
@@ -108,29 +112,39 @@ def train_fn():
             #  2. Generator
             # ---------------------
             opt_gen.zero_grad()
-
+            # Autocast 2
             with torch.amp.autocast(device_type="cuda"):
+                # Discriminator output for generator
                 disc_fake_for_gen = disc(masked_img, mask, fake_img)
                 loss_gen_gan = BCE(disc_fake_for_gen, torch.ones_like(disc_fake_for_gen))
 
+                # L1 Loss
                 missing_region_mask = 1.0 - mask
                 l1_global = L1_LOSS(fake_img, target)
                 l1_masked = L1_LOSS(fake_img * missing_region_mask, target * missing_region_mask)
                 loss_gen_l1 = (l1_global + 10 * l1_masked) * LAMBDA_L1
 
-                loss_gen_perc = PERCEPTUAL_LOSS(fake_img, target) * LAMBDA_PERCEPTUAL
+                # Perceptual and Style Loss
+                loss_gen_perc, loss_gen_style = PERCEPTUAL_STYLE_LOSS(fake_img, target)
+                loss_gen_perc = loss_gen_perc * LAMBDA_PERCEPTUAL
+                loss_gen_style = loss_gen_style * LAMBDA_STYLE
 
-                loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc
+                # Frequency (FFT) Loss. Prevents blurring and smearing
+                loss_gen_fft = FFT_LOSS(fake_img, target) * LAMBDA_FFT
+
+                # Total Generator Loss
+                loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc + loss_gen_style + loss_gen_fft
 
             scaler_gen.scale(loss_gen).backward()
             scaler_gen.step(opt_gen)
             scaler_gen.update()
 
             loop.set_postfix(
-                D_loss=loss_disc.item(),
-                G_loss=loss_gen.item(),
-                L1=loss_gen_l1.item(),
-                Perc=loss_gen_perc.item()
+                D_loss=f"{loss_disc.item():.3f}",
+                G_loss=f"{loss_gen.item():.1f}",
+                L1=f"{loss_gen_l1.item():.1f}",
+                Style=f"{loss_gen_style.item():.1f}",
+                FFT=f"{loss_gen_fft.item():.1f}"
             )
 
 
