@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from torchvision.utils import save_image
 from tqdm import tqdm
 
 from dataset import OutpaintingDataset
@@ -15,11 +16,34 @@ BATCH_SIZE = 8          # RTX 5060 (8GB VRAM) Ideal batch sie
 LEARNING_RATE = 0.0002   # Pix2Pix original learning rate
 LAMBDA_L1 = 100         # L1 loss mass multiplier
 LAMBDA_PERCEPTUAL = 10
-NUM_EPOCHS = 25         # Total loop number
+NUM_EPOCHS = 20         # Total loop number
 IMAGE_SIZE = 256
 CHECKPOINT_DIR = "checkpoints"
+SAMPLES_DIR = "samples"
 
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+os.makedirs(SAMPLES_DIR, exist_ok=True)
+
+
+def save_samples(gen, loader, epoch):
+    """Eğitim devam ederken örnek görselleri diske kaydeder."""
+    gen.eval()
+    with torch.no_grad():
+        masked_img, mask, target = next(iter(loader))
+        masked_img, mask, target = masked_img.to(DEVICE), mask.to(DEVICE), target.to(DEVICE)
+        
+        fake_img = gen(masked_img, mask)
+        
+        # Denormalize [-1, 1] -> [0, 1]
+        masked_img = (masked_img + 1) / 2
+        fake_img = (fake_img + 1) / 2
+        target = (target + 1) / 2
+
+        # İlk 4 görseli grid şeklinde birleştirip kaydet
+        results = torch.cat([masked_img[:4], fake_img[:4], target[:4]], dim=0)
+        save_image(results, f"{SAMPLES_DIR}/epoch_{epoch+1}.png", nrow=4)
+    gen.train()
+
 
 def train_fn():
     # 2-Data Loader
@@ -57,10 +81,13 @@ def train_fn():
             fake_img = gen(masked_img, mask)
 
             disc_real = disc(masked_img, mask, target)
-            loss_disc_real = BCE(disc_real, torch.ones_like(disc_real))
+            # Label Smoothing
+            real_labels = torch.ones_like(disc_real) * 0.9
+            loss_disc_real = BCE(disc_real, real_labels)
 
             disc_fake = disc(masked_img, mask, fake_img.detach())
-            loss_disc_fake = BCE(disc_fake, torch.zeros_like(disc_fake))
+            fake_labels = torch.zeros_like(disc_fake)
+            loss_disc_fake = BCE(disc_fake, fake_labels)
 
             loss_disc = (loss_disc_real + loss_disc_fake) / 2
 
@@ -74,7 +101,7 @@ def train_fn():
             disc_fake_for_gen = disc(masked_img, mask, fake_img)
             loss_gen_gan = BCE(disc_fake_for_gen, torch.ones_like(disc_fake_for_gen))
 
-            # Masked L1 Loss: Üretilen alana (mask == 0) 10 kat daha fazla odaklanılır
+            # Masked L1 Loss
             missing_region_mask = 1.0 - mask
             l1_global = L1_LOSS(fake_img, target)
             l1_masked = L1_LOSS(fake_img * missing_region_mask, target * missing_region_mask)
@@ -83,7 +110,6 @@ def train_fn():
             # VGG19 Perceptual Loss
             loss_gen_perc = PERCEPTUAL_LOSS(fake_img, target) * LAMBDA_PERCEPTUAL
 
-            # Total Generator Loss
             loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc
 
             opt_gen.zero_grad()
@@ -96,6 +122,9 @@ def train_fn():
                 L1=loss_gen_l1.item(),
                 Perc=loss_gen_perc.item()
             )
+        if (epoch + 1) % 2 == 0:
+            save_samples(gen, loader, epoch)
+
 
         # Save the model weights every 5 epochs
         if (epoch + 1) % 5 == 0:

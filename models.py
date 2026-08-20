@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.nn.utils import spectral_norm
 
 class UNetBlock(nn.Module):
     """
@@ -79,7 +80,7 @@ class UNetGenerator(nn.Module):
         self.final = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='nearest'),
             nn.Conv2d(128, out_channels, kernel_size=3, stride=1, padding=1),
-            nn.Tanh() # Çıktıyı [-1, 1] aralığına sıkıştırır
+            nn.Tanh() 
         )
 
     def forward(self, masked_img, mask):
@@ -118,18 +119,19 @@ class PatchGANDiscriminator(nn.Module):
         super().__init__()
 
         def block(in_c, out_c, stride=2, normalize=True):
-            layers = [nn.Conv2d(in_c, out_c, kernel_size=4, stride=stride, padding=1)]
+            conv = spectral_norm(nn.Conv2d(in_c, out_c, kernel_size=4, stride=stride, padding=1))
+            layers = [conv]
             if normalize:
                 layers.append(nn.BatchNorm2d(out_c))
             layers.append(nn.LeakyReLU(0.2, inplace=True))
             return layers
 
         self.model = nn.Sequential(
-            *block(in_channels, 64, stride=2, normalize=False), # 256 -> 128
-            *block(64, 128, stride=2),                          # 128 -> 64
-            *block(128, 256, stride=2),                         # 64 -> 32
-            *block(256, 512, stride=1),                         # 32 -> 31
-            nn.Conv2d(512, 1, kernel_size=4, padding=1)         # 31 -> 30
+            *block(in_channels, 64, stride=2, normalize=False),
+            *block(64, 128, stride=2),
+            *block(128, 256, stride=2),
+            *block(256, 512, stride=1),
+            spectral_norm(nn.Conv2d(512, 1, kernel_size=4, padding=1))
         )
 
     def forward(self, masked_img, mask, image):
