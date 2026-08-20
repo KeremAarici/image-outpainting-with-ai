@@ -33,6 +33,7 @@ class PerceptualAndStyleLoss(nn.Module):
             param.requires_grad = False
             
         self.l1 = nn.L1Loss()
+        # Standard VGG normalization multiplier.
 
     def gram_matrix(self, x):
         (b, c, h, w) = x.size()
@@ -42,20 +43,23 @@ class PerceptualAndStyleLoss(nn.Module):
         return gram
 
     def forward(self, x, y):
-        x_h1, y_h1 = self.slice1(x), self.slice1(y)
-        x_h2, y_h2 = self.slice2(x_h1), self.slice2(y_h1)
-        x_h3, y_h3 = self.slice3(x_h2), self.slice3(y_h2)
-        x_h4, y_h4 = self.slice4(x_h3), self.slice4(y_h3)
+        # Gram Matrix prevents FP16 overflow in matrix multiplication
+        with torch.amp.autocast(device_type="cuda", enabled=False):
+            x_fp32 = (x.float() - self.mean) / self.std
+            y_fp32 = (y.float() - self.mean) / self.std
 
-        # Perceptual loss
-        perc_loss = self.l1(x_h1, y_h1) + self.l1(x_h2, y_h2) + self.l1(x_h3, y_h3) + self.l1(x_h4, y_h4)
+            x_h1, y_h1 = self.slice1(x_fp32), self.slice1(y_fp32)
+            x_h2, y_h2 = self.slice2(x_h1), self.slice2(y_h1)
+            x_h3, y_h3 = self.slice3(x_h2), self.slice3(y_h2)
+            x_h4, y_h4 = self.slice4(x_h3), self.slice4(y_h3)
 
-        # Style loss (Gram Matrix - Texture Details)
-        style_loss = (
-            self.l1(self.gram_matrix(x_h1), self.gram_matrix(y_h1)) +
-            self.l1(self.gram_matrix(x_h2), self.gram_matrix(y_h2)) +
-            self.l1(self.gram_matrix(x_h3), self.gram_matrix(y_h3)) +
-            self.l1(self.gram_matrix(x_h4), self.gram_matrix(y_h4))
-        )
+            perc_loss = self.l1(x_h1, y_h1) + self.l1(x_h2, y_h2) + self.l1(x_h3, y_h3) + self.l1(x_h4, y_h4)
+
+            style_loss = (
+                self.l1(self.gram_matrix(x_h1), self.gram_matrix(y_h1)) +
+                self.l1(self.gram_matrix(x_h2), self.gram_matrix(y_h2)) +
+                self.l1(self.gram_matrix(x_h3), self.gram_matrix(y_h3)) +
+                self.l1(self.gram_matrix(x_h4), self.gram_matrix(y_h4))
+            )
 
         return perc_loss, style_loss
