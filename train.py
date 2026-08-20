@@ -86,9 +86,13 @@ def train_fn():
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
-    for epoch in range(NUM_EPOCHS):
+    START_EPOCH = 20
+    ADDITIONAL_EPOCHS = 20 # (21-40)
+
+
+    for epoch in range(START_EPOCH, START_EPOCH + ADDITIONAL_EPOCHS):
         loop = tqdm(loader, leave=True)
-        loop.set_description(f"Epoch [{epoch+1}/{NUM_EPOCHS}]")
+        loop.set_description(f"Epoch [{epoch+1}/{START_EPOCH + ADDITIONAL_EPOCHS}]")
 
         for idx, (masked_img, mask, target) in enumerate(loop):
             masked_img = masked_img.to(DEVICE)
@@ -160,7 +164,7 @@ def train_fn():
 
 
         if (epoch + 1) % 2 == 0:
-            save_samples(gen, loader, epoch)
+            save_samples(gen, loader, epoch + 1)
 
 
         # Save the model weights every 5 epochs
