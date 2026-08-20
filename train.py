@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
-from loss import PerceptualAndStyleLoss, FFTLoss
+from loss import PerceptualAndStyleLoss, FFTLoss, MaskBoundaryLoss
 
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -18,7 +18,8 @@ LAMBDA_L1 = 10         # L1 loss mass multiplier
 LAMBDA_PERCEPTUAL = 10
 LAMBDA_STYLE = 250       # New Texture Loss Weight
 LAMBDA_FFT = 100         # New Frequency/Sharpness Weight
-NUM_EPOCHS = 20         # Total loop number
+LAMBDA_BOUNDARY = 20.0   # Penalty Weight Of Boundary
+NUM_EPOCHS = 20          # Total loop number
 IMAGE_SIZE = 256
 CHECKPOINT_DIR = "checkpoints"
 SAMPLES_DIR = "samples"
@@ -72,22 +73,24 @@ def train_fn():
     PERCEPTUAL_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     FFT_LOSS = FFTLoss().to(DEVICE)
+    MASK_BOUNDARY_LOSS = MaskBoundaryLoss(kernel_size=9).to(DEVICE)
 
     # =========================================================
     # To continue your training where you left off!!!!!!!!!!!!!
     # =========================================================
     LOAD_MODEL = True
+    START_EPOCH = 35
+    ADDITIONAL_EPOCHS = 20
 
     if LOAD_MODEL:
-        print("Loading the available checkpoint weights (Epoch 20)...")
-        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_20.pth"))
-        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_20.pth"))
+        print("Loading the available checkpoint weights (Epoch 35)...")
+        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_35.pth"))
+        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_35.pth"))
 
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
-    START_EPOCH = 20
-    ADDITIONAL_EPOCHS = 20 # (21-40)
+    
 
 
     for epoch in range(START_EPOCH, START_EPOCH + ADDITIONAL_EPOCHS):
@@ -150,6 +153,19 @@ def train_fn():
                 # Total Generator Loss
                 loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc + loss_gen_style + loss_gen_fft
 
+                # Sınır Hattı Geçiş Kaybı
+                loss_gen_boundary = MASK_BOUNDARY_LOSS(fake_img, target, mask) * LAMBDA_BOUNDARY
+
+                # Total Generator Loss
+                loss_gen = (
+                    loss_gen_gan + 
+                    loss_gen_l1 + 
+                    loss_gen_perc + 
+                    loss_gen_style + 
+                    loss_gen_fft + 
+                    loss_gen_boundary
+                )
+
             scaler_gen.scale(loss_gen).backward()
             scaler_gen.step(opt_gen)
             scaler_gen.update()
@@ -159,7 +175,8 @@ def train_fn():
                 G_loss=f"{loss_gen.item():.1f}",
                 L1=f"{loss_gen_l1.item():.1f}",
                 Style=f"{loss_gen_style.item():.1f}",
-                FFT=f"{loss_gen_fft.item():.1f}"
+                FFT=f"{loss_gen_fft.item():.1f}",
+                Bnd=f"{loss_gen_boundary.item():.1f}"
             )
 
 
