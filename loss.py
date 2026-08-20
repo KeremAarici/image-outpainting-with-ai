@@ -72,13 +72,13 @@ class PerceptualAndStyleLoss(nn.Module):
         return perc_loss, style_loss
 
 class MaskBoundaryLoss(nn.Module):
-    """Maske birleşim hattındaki dikiş izlerini (seam) ve renk kırılmalarını engelleyen kayıp fonksiyonu."""
+    """A mask feature that prevents seam lines and color breaks along the assembly line."""
     def __init__(self, kernel_size=9):
         super().__init__()
         self.kernel_size = kernel_size
         self.l1 = nn.L1Loss()
         
-        # Gradyan/Kenar sürekliliği için Sobel filtreleri
+        # Gradyan/Corner continuity. Sobel Filters
         sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
         sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
         self.register_buffer("sobel_x", sobel_x)
@@ -90,15 +90,15 @@ class MaskBoundaryLoss(nn.Module):
             target_fp32 = target.float()
             mask_fp32 = mask.float()
 
-            # MaxPool2d (Morfolojik Dilation ve Erosion) ile sınır şeridini çıkarma
+            # MaxPool2d (Morfolojik Dilation and Erosion)
             dilated = F.max_pool2d(mask_fp32, kernel_size=self.kernel_size, stride=1, padding=self.kernel_size // 2)
             eroded = -F.max_pool2d(-mask_fp32, kernel_size=self.kernel_size, stride=1, padding=self.kernel_size // 2)
-            boundary_strip = dilated - eroded  # Sadece sınır çizgisinde 1, diğer yerlerde 0 olan bant
+            boundary_strip = dilated - eroded  
 
-            # 1. Sınır Hattı Renk Uyumu (Piksel L1)
+            # Color compatibility
             loss_pixel = self.l1(fake_fp32 * boundary_strip, target_fp32 * boundary_strip)
 
-            # 2. Sınır Hattı Gradyan/Doğrultu Uyumu (Sobel Filtresi)
+            # Border line gradian
             b, c, h, w = fake_fp32.shape
             fake_grad_x = F.conv2d(fake_fp32.view(b * c, 1, h, w), self.sobel_x, padding=1).view(b, c, h, w)
             target_grad_x = F.conv2d(target_fp32.view(b * c, 1, h, w), self.sobel_x, padding=1).view(b, c, h, w)
@@ -112,3 +112,50 @@ class MaskBoundaryLoss(nn.Module):
             )
 
             return loss_pixel + 2.0 * loss_grad
+
+
+class ColorLoss(nn.Module):
+    """It filters out high-frequency textures and, by matching only the background color palette,
+    prevents purple/pink mottling and color deviations."""
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.L1Loss()
+        # Coverts images to color maps
+        self.blur = nn.AvgPool2d(kernel_size=16, stride=16)
+
+    def forward(self, x, y):
+        with torch.amp.autocast(device_type="cuda", enabled=False):
+            
+            x_01 = (x.float() + 1.0) / 2.0
+            y_01 = (y.float() + 1.0) / 2.0
+            return self.l1(self.blur(x_01), self.blur(y_01))
+
+
+class StructuralGradientLoss(nn.Module):
+    """The line in the generated region represents the entire area where
+    human limbs and object edges are prevented from becoming blurred and smudged—this is known as Sobel structure loss."""
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.L1Loss()
+        sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32).view(1, 1, 3, 3)
+        sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32).view(1, 1, 3, 3)
+        self.register_buffer("sobel_x", sobel_x)
+        self.register_buffer("sobel_y", sobel_y)
+
+    def forward(self, fake_img, target, mask):
+        with torch.amp.autocast(device_type="cuda", enabled=False):
+            missing_region_mask = 1.0 - mask.float()
+            fake_fp32 = fake_img.float()
+            target_fp32 = target.float()
+
+            b, c, h, w = fake_fp32.shape
+            fake_gx = F.conv2d(fake_fp32.view(b * c, 1, h, w), self.sobel_x, padding=1).view(b, c, h, w)
+            target_gx = F.conv2d(target_fp32.view(b * c, 1, h, w), self.sobel_x, padding=1).view(b, c, h, w)
+
+            fake_gy = F.conv2d(fake_fp32.view(b * c, 1, h, w), self.sobel_y, padding=1).view(b, c, h, w)
+            target_gy = F.conv2d(target_fp32.view(b * c, 1, h, w), self.sobel_y, padding=1).view(b, c, h, w)
+
+            loss_x = self.l1(fake_gx * missing_region_mask, target_gx * missing_region_mask)
+            loss_y = self.l1(fake_gy * missing_region_mask, target_gy * missing_region_mask)
+
+            return loss_x + loss_y

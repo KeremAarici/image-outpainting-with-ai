@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
-from loss import PerceptualAndStyleLoss, FFTLoss, MaskBoundaryLoss
+from loss import PerceptualAndStyleLoss, FFTLoss, MaskBoundaryLoss, ColorLoss, StructuralGradientLoss
 
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -16,9 +16,11 @@ BATCH_SIZE = 8          # RTX 5060 (8GB VRAM) Ideal batch sie
 LEARNING_RATE = 0.0002   # Pix2Pix original learning rate
 LAMBDA_L1 = 10         # L1 loss mass multiplier
 LAMBDA_PERCEPTUAL = 10
-LAMBDA_STYLE = 250       # New Texture Loss Weight
+LAMBDA_STYLE = 100       # New Texture Loss Weight
 LAMBDA_FFT = 100         # New Frequency/Sharpness Weight
 LAMBDA_BOUNDARY = 20.0   # Penalty Weight Of Boundary
+LAMBDA_COLOR = 15.0
+LAMBDA_STRUCT = 20.0
 NUM_EPOCHS = 20          # Total loop number
 IMAGE_SIZE = 256
 CHECKPOINT_DIR = "checkpoints"
@@ -73,6 +75,8 @@ def train_fn():
     PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     FFT_LOSS = FFTLoss().to(DEVICE)
     MASK_BOUNDARY_LOSS = MaskBoundaryLoss(kernel_size=9).to(DEVICE)
+    COLOR_LOSS = ColorLoss().to(DEVICE)
+    STRUCTURAL_LOSS = StructuralGradientLoss().to(DEVICE)
 
     # =========================================================
     # To continue your training where you left off!!!!!!!!!!!!!
@@ -150,8 +154,12 @@ def train_fn():
                 loss_gen_fft = FFT_LOSS(fake_img, target) * LAMBDA_FFT
 
 
-                # Sınır Hattı Geçiş Kaybı
+                # Boundary
                 loss_gen_boundary = MASK_BOUNDARY_LOSS(fake_img, target, mask) * LAMBDA_BOUNDARY
+                # Color
+                loss_gen_color = COLOR_LOSS(fake_img, target) * LAMBDA_COLOR
+                # Geometrical texture and secure
+                loss_gen_struct = STRUCTURAL_LOSS(fake_img, target, mask) * LAMBDA_STRUCT
 
                 # Total Generator Loss
                 loss_gen = (
@@ -160,7 +168,9 @@ def train_fn():
                     loss_gen_perc + 
                     loss_gen_style + 
                     loss_gen_fft + 
-                    loss_gen_boundary
+                    loss_gen_boundary +
+                    loss_gen_color +
+                    loss_gen_struct
                 )
 
             scaler_gen.scale(loss_gen).backward()
@@ -172,8 +182,8 @@ def train_fn():
                 G_loss=f"{loss_gen.item():.1f}",
                 L1=f"{loss_gen_l1.item():.1f}",
                 Style=f"{loss_gen_style.item():.1f}",
-                FFT=f"{loss_gen_fft.item():.1f}",
-                Bnd=f"{loss_gen_boundary.item():.1f}"
+                Clr=f"{loss_gen_color.item():.1f}",
+                Str=f"{loss_gen_struct.item():.1f}"
             )
 
 
