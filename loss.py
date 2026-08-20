@@ -49,8 +49,11 @@ class PerceptualAndStyleLoss(nn.Module):
             mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
             std = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
 
-            x_fp32 = (x.float() - mean) / std
-            y_fp32 = (y.float() - mean) / std
+            x_01 = (x.float() + 1.0) / 2.0
+            y_01 = (y.float() + 1.0) / 2.0
+
+            x_fp32 = (x_01 - mean) / std
+            y_fp32 = (y_01 - mean) / std
 
             x_h1, y_h1 = self.slice1(x_fp32), self.slice1(y_fp32)
             x_h2, y_h2 = self.slice2(x_h1), self.slice2(y_h1)

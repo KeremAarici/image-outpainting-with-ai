@@ -70,7 +70,6 @@ def train_fn():
     # 5=Loss func.
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
     L1_LOSS = nn.L1Loss()        # Pixel-based loss of detail
-    PERCEPTUAL_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     PERCEPTUAL_STYLE_LOSS = PerceptualAndStyleLoss().to(DEVICE)
     FFT_LOSS = FFTLoss().to(DEVICE)
     MASK_BOUNDARY_LOSS = MaskBoundaryLoss(kernel_size=9).to(DEVICE)
@@ -84,8 +83,8 @@ def train_fn():
 
     if LOAD_MODEL:
         print("Loading the available checkpoint weights (Epoch 35)...")
-        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_35.pth"))
-        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_35.pth"))
+        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_35.pth"), strict=False)
+        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_35.pth"), strict=False)
 
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
@@ -150,8 +149,6 @@ def train_fn():
                 # Frequency (FFT) Loss. Prevents blurring and smearing
                 loss_gen_fft = FFT_LOSS(fake_img, target) * LAMBDA_FFT
 
-                # Total Generator Loss
-                loss_gen = loss_gen_gan + loss_gen_l1 + loss_gen_perc + loss_gen_style + loss_gen_fft
 
                 # Sınır Hattı Geçiş Kaybı
                 loss_gen_boundary = MASK_BOUNDARY_LOSS(fake_img, target, mask) * LAMBDA_BOUNDARY
@@ -181,7 +178,7 @@ def train_fn():
 
 
         if (epoch + 1) % 2 == 0:
-            save_samples(gen, loader, epoch + 1)
+            save_samples(gen, loader, epoch)
 
 
         # Save the model weights every 5 epochs

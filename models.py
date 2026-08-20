@@ -18,8 +18,9 @@ class UNetBlock(nn.Module):
             )
         else:
             # Decoder Layer
-            self.conv = nn.Sequential(
-                nn.ConvTranspose2d(in_c, out_c, kernel_size=4, stride=2, padding=1, bias=False),
+           self.conv = nn.Sequential(
+                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
+                nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=1),
                 nn.BatchNorm2d(out_c),
                 nn.ReLU(inplace=True)
             )
@@ -60,7 +61,7 @@ class UNetGenerator(nn.Module):
         # --- DECODER ---
         def up_block(in_c, out_c, dropout=False):
             layers = [
-                nn.Upsample(scale_factor=2, mode='nearest'),
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
                 nn.Conv2d(in_c, out_c, kernel_size=3, stride=1, padding=1, bias=False),
                 nn.BatchNorm2d(out_c),
                 nn.ReLU(inplace=True)
@@ -78,7 +79,7 @@ class UNetGenerator(nn.Module):
         self.d7 = up_block(256, 64)                 # 64 -> 128
 
         self.final = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='nearest'),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
             nn.Conv2d(128, out_channels, kernel_size=3, stride=1, padding=1),
             nn.Tanh() 
         )
