@@ -33,8 +33,7 @@ class PerceptualAndStyleLoss(nn.Module):
             param.requires_grad = False
             
         self.l1 = nn.L1Loss()
-        # Standard VGG normalization multiplier.
-
+    # Standard VGG normalization multiplier.
     def gram_matrix(self, x):
         (b, c, h, w) = x.size()
         features = x.view(b, c, h * w)
@@ -45,8 +44,12 @@ class PerceptualAndStyleLoss(nn.Module):
     def forward(self, x, y):
         # Gram Matrix prevents FP16 overflow in matrix multiplication
         with torch.amp.autocast(device_type="cuda", enabled=False):
-            x_fp32 = (x.float() - self.mean) / self.std
-            y_fp32 = (y.float() - self.mean) / self.std
+            # Dynamic Device Detection
+            mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
+
+            x_fp32 = (x.float() - mean) / std
+            y_fp32 = (y.float() - mean) / std
 
             x_h1, y_h1 = self.slice1(x_fp32), self.slice1(y_fp32)
             x_h2, y_h2 = self.slice2(x_h1), self.slice2(y_h1)
