@@ -10,6 +10,9 @@ from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
 from loss import PerceptualAndStyleLoss, FFTLoss, MaskBoundaryLoss, ColorLoss, StructuralGradientLoss
 
+torch.backends.cudnn.benchmark = True
+
+
 # 1-Hyperparameters and settings
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 8          # RTX 5060 (8GB VRAM) Ideal batch sie
@@ -53,8 +56,19 @@ def save_samples(gen, loader, epoch):
 
 def train_fn():
     # 2-Data Loader
-    dataset = OutpaintingDataset("data/val2017", image_size=IMAGE_SIZE)
-    loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
+    dataset_paths = [
+    "data/val2017",
+    "data/train2017"  # Yeni indirilen klasör
+    ]
+
+    dataset = OutpaintingDataset(image_dir=dataset_paths, image_size=IMAGE_SIZE)
+    loader = DataLoader(
+        dataset, 
+        batch_size=BATCH_SIZE, 
+        shuffle=True, 
+        num_workers=10, 
+        pin_memory=True,
+        persistent_workers=True)
 
     # 3-Starting the models
     gen = UNetGenerator().to(DEVICE)
@@ -66,8 +80,9 @@ def train_fn():
     opt_disc = optim.Adam(disc.parameters(), lr=LEARNING_RATE, betas=(0.5, 0.999))
 
     # AMP Accelerator
-    scaler_gen = torch.cuda.amp.GradScaler()
-    scaler_disc = torch.cuda.amp.GradScaler()
+    scaler_gen = torch.amp.GradScaler()
+    scaler_disc = torch.amp.GradScaler()
+
 
     # 5=Loss func.
     BCE = nn.BCEWithLogitsLoss() # GAN real/fake loss (Sigmoid included)
@@ -82,18 +97,19 @@ def train_fn():
     # To continue your training where you left off!!!!!!!!!!!!!
     # =========================================================
     LOAD_MODEL = True
-    START_EPOCH = 35
-    ADDITIONAL_EPOCHS = 20
+    START_EPOCH = 50
+    ADDITIONAL_EPOCHS = 10
 
     if LOAD_MODEL:
-        print("Loading the available checkpoint weights (Epoch 35)...")
-        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_35.pth"), strict=False)
-        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_35.pth"), strict=False)
+        print("Loading the available checkpoint weights (Epoch 50)...")
+        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_50.pth"), strict=False)
+        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_50.pth"), strict=False)
 
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
 
-    
+    # gen = torch.compile(gen)
+    # disc = torch.compile(disc)
 
 
     for epoch in range(START_EPOCH, START_EPOCH + ADDITIONAL_EPOCHS):
@@ -108,7 +124,7 @@ def train_fn():
             # ---------------------
             #  1. Discriminator
             # ---------------------
-            opt_disc.zero_grad()
+            opt_disc.zero_grad(set_to_none=True)
 
             # Autocast 1 
             with torch.amp.autocast(device_type="cuda"):
@@ -132,7 +148,7 @@ def train_fn():
             # ---------------------
             #  2. Generator
             # ---------------------
-            opt_gen.zero_grad()
+            opt_gen.zero_grad(set_to_none=True)
             # Autocast 2
             with torch.amp.autocast(device_type="cuda"):
                 # Discriminator output for generator
