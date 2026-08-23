@@ -57,23 +57,25 @@ def save_samples(gen, loader, epoch):
 
 def train_fn():
     # 2-Data Loader
-
     dataset_paths = [
     "data/val2017",
-    "data/train2017"  # Yeni indirilen klasör
+    "data/train2017"  # New installed folder
     ]
+
+    dataset = OutpaintingDataset(image_dir=dataset_paths, image_size=IMAGE_SIZE)
+
     SAMPLES_PER_EPOCH = 10000
     sampler = RandomSampler(dataset, replacement=True, num_samples=SAMPLES_PER_EPOCH)
 
-    dataset = OutpaintingDataset(image_dir=dataset_paths, image_size=IMAGE_SIZE)
+    
     loader = DataLoader(
         dataset, 
-        batch_size=BATCH_SIZE,    # RTX 5060 için 8 olarak ayarlamıştık[cite: 3]
-        sampler=sampler,          # shuffle=True yerine sampler kullanıyoruz
-        num_workers=6,            # İşlemci çekirdeğine göre 6 veya 8 kalabilir
+        batch_size=BATCH_SIZE,    
+        sampler=sampler,          
+        num_workers=8,            
         pin_memory=True, 
         persistent_workers=True,
-        prefetch_factor=3         # GPU'nun veri beklemesini engeller
+        prefetch_factor=3         
     )
 
     # 3-Starting the models
