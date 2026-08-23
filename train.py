@@ -2,9 +2,10 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from torchvision.utils import save_image
 from tqdm import tqdm
+
 
 from dataset import OutpaintingDataset
 from models import UNetGenerator, PatchGANDiscriminator
@@ -56,19 +57,24 @@ def save_samples(gen, loader, epoch):
 
 def train_fn():
     # 2-Data Loader
+
     dataset_paths = [
     "data/val2017",
     "data/train2017"  # Yeni indirilen klasör
     ]
+    SAMPLES_PER_EPOCH = 10000
+    sampler = RandomSampler(dataset, replacement=True, num_samples=SAMPLES_PER_EPOCH)
 
     dataset = OutpaintingDataset(image_dir=dataset_paths, image_size=IMAGE_SIZE)
     loader = DataLoader(
         dataset, 
-        batch_size=BATCH_SIZE, 
-        shuffle=True, 
-        num_workers=10, 
-        pin_memory=True,
-        persistent_workers=True)
+        batch_size=BATCH_SIZE,    # RTX 5060 için 8 olarak ayarlamıştık[cite: 3]
+        sampler=sampler,          # shuffle=True yerine sampler kullanıyoruz
+        num_workers=6,            # İşlemci çekirdeğine göre 6 veya 8 kalabilir
+        pin_memory=True, 
+        persistent_workers=True,
+        prefetch_factor=3         # GPU'nun veri beklemesini engeller
+    )
 
     # 3-Starting the models
     gen = UNetGenerator().to(DEVICE)
@@ -207,8 +213,8 @@ def train_fn():
             save_samples(gen, loader, epoch)
 
 
-        # Save the model weights every 5 epochs
-        if (epoch + 1) % 5 == 0:
+        # Save the model weights every 2 epochs
+        if (epoch + 1) % 2 == 0:
             torch.save(gen.state_dict(), f"{CHECKPOINT_DIR}/gen_epoch_{epoch+1}.pth")
             torch.save(disc.state_dict(), f"{CHECKPOINT_DIR}/disc_epoch_{epoch+1}.pth")
             print(f"\n[Saved weights] Epoch {epoch+1} checkpoint created.")
