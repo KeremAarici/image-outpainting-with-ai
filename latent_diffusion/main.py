@@ -56,7 +56,7 @@ def main():
         control_image=canny_image,
         prompt=prompt,
         negative_prompt=negative_prompt,
-        controlnet_conditioning_scale=0.4,
+        controlnet_conditioning_scale=0.55,
         strength=1.0,
         guidance_scale=7.5,
         num_inference_steps=50
