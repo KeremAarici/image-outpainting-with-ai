@@ -1,13 +1,12 @@
 import os
 from PIL import Image
-# Bizim yazdığımız yerel modüller (aynı klasörde oldukları için doğrudan import ediyoruz)
 from sd_inpainter import SDControlNetInpainter
 from image_processor import ImageProcessor
 
 def main():
     
     
-    input_image_path = "../input.jpg" 
+    input_image_path = "input.jpg" 
     output_image_path = "output_outpainted.png"
     device = "cuda" # For NVIDIA GPU Usage
     
@@ -24,20 +23,20 @@ def main():
     print("[INFO] images downloading")
     init_image = Image.open(input_image_path).convert("RGB")
 
+    # You can adjust where and how far the image extends right here
     padding = {
-        "top": 256,
-        "bottom": 256,
-        "left": 256,
-        "right": 256
+        "top": 50,
+        "bottom": 500,
+        "left": 50,
+        "right": 50
     }
 
     expanded_image, mask_image = processor.create_outpainting_mask(init_image, padding)
 
     
-    print("[INFO] Canny kenar haritası oluşturuluyor (boundary-safe)...")
+    print("[INFO] Creating the Canny corner mapping (boundary-safe)...")
     canny_image = processor.extract_canny_edges(init_image, padding)
 
-    # (Opsiyonel) Ara aşamaları kaydetmek isterseniz:
     mask_image.save("debug_mask.png")
     canny_image.save("debug_canny.png")
 
@@ -56,16 +55,16 @@ def main():
         control_image=canny_image,
         prompt=prompt,
         negative_prompt=negative_prompt,
-        controlnet_conditioning_scale=0.55,
+        controlnet_conditioning_scale=0.42,
         strength=1.0,
-        guidance_scale=7.5,
+        guidance_scale=7,
         num_inference_steps=50
     )
 
     # Save
-    print(f"[INFO] Sonuç kaydediliyor: {output_image_path}")
+    print(f"[INFO] Result saving: {output_image_path}")
     result_image.save(output_image_path)
-    print("[INFO] İşlem başarıyla tamamlandı.")
+    print("[INFO] Operation is successfull.")
 
 if __name__ == "__main__":
     main()
