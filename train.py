@@ -35,7 +35,7 @@ os.makedirs(SAMPLES_DIR, exist_ok=True)
 
 
 def save_samples(gen, loader, epoch):
-    """Eğitim devam ederken örnek görselleri diske kaydeder."""
+    """Saves the sample images to disk while the training continues."""
     gen.eval()
     with torch.no_grad():
         masked_img, mask, target = next(iter(loader))
@@ -49,7 +49,7 @@ def save_samples(gen, loader, epoch):
         fake_img = (fake_img + 1) / 2
         target = (target + 1) / 2
 
-        # İlk 4 görseli grid şeklinde birleştirip kaydet
+        # Save first 4 pictures as grid
         results = torch.cat([masked_img[:4], fake_img[:4], target[:4]], dim=0)
         save_image(results, f"{SAMPLES_DIR}/epoch_{epoch+1}.png", nrow=4)
     gen.train()
@@ -105,13 +105,13 @@ def train_fn():
     # To continue your training where you left off!!!!!!!!!!!!!
     # =========================================================
     LOAD_MODEL = True
-    START_EPOCH = 50
-    ADDITIONAL_EPOCHS = 10
+    START_EPOCH = 60
+    ADDITIONAL_EPOCHS = 50
 
     if LOAD_MODEL:
-        print("Loading the available checkpoint weights (Epoch 50)...")
-        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_50.pth"), strict=False)
-        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_50.pth"), strict=False)
+        print("Loading the available checkpoint weights (Epoch 60)...")
+        gen.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/gen_epoch_60.pth"), strict=False)
+        disc.load_state_dict(torch.load(f"{CHECKPOINT_DIR}/disc_epoch_60.pth"), strict=False)
 
 
     print(f"Training starts in {DEVICE.upper()}... Total Pictures: {len(dataset)}")
@@ -215,8 +215,8 @@ def train_fn():
             save_samples(gen, loader, epoch)
 
 
-        # Save the model weights every 2 epochs
-        if (epoch + 1) % 2 == 0:
+        # Save the model weights every 5 epochs
+        if (epoch + 1) % 5 == 0:
             torch.save(gen.state_dict(), f"{CHECKPOINT_DIR}/gen_epoch_{epoch+1}.pth")
             torch.save(disc.state_dict(), f"{CHECKPOINT_DIR}/disc_epoch_{epoch+1}.pth")
             print(f"\n[Saved weights] Epoch {epoch+1} checkpoint created.")
