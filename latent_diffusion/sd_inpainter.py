@@ -1,95 +1,71 @@
-import os
 import torch
-import numpy as np
-import cv2
+from diffusers import StableDiffusionInpaintPipeline, ControlNetModel, UniPCMultistepScheduler
 from PIL import Image
-from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel
 
 class SDControlNetInpainter:
     """
-    Inpainting pipeline leveraging Stable Diffusion and ControlNet (Canny edge guidance)
-    for seamless image completion and semantic object generation.
+    Manages the Stable Diffusion Inpainting + ControlNet Canny pipeline for high-quality outpainting.
     """
-    def __init__(self, device: str = None):
-        # Automatically detect CUDA GPU availability if not specified
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.torch_dtype = torch.float16 if self.device == "cuda" else torch.float32
+    def __init__(self, device="cuda", model_id="runwayml/stable-diffusion-inpainting", controlnet_id="lllyasviel/sd-controlnet-canny"):
+        self.device = device
         
-        print(f"[INFO] Initializing SDControlNetInpainter on device: {self.device}")
-        
-        # Load pre-trained Canny ControlNet checkpoint
-        print("[INFO] Loading ControlNet model (Canny)...")
+        # 1. Load ControlNet model
+        print(f"[INFO] Loading ControlNet model: {controlnet_id}...")
         self.controlnet = ControlNetModel.from_pretrained(
-            "lllyasviel/sd-controlnet-canny",
-            torch_dtype=self.torch_dtype
+            controlnet_id, torch_dtype=torch.float16
         )
         
-        # Initialize the Stable Diffusion Inpainting pipeline integrated with ControlNet
-        print("[INFO] Loading Stable Diffusion Inpainting pipeline...")
-        self.pipe = StableDiffusionControlNetInpaintPipeline.from_pretrained(
-            "runwayml/stable-diffusion-inpainting",
-            controlnet=self.controlnet,
-            torch_dtype=self.torch_dtype
-        ).to(self.device)
+        # 2. Load Inpainting Pipeline with ControlNet attached
+        print(f"[INFO] Loading Inpainting Pipeline: {model_id}...")
+        self.pipe = StableDiffusionInpaintPipeline.from_pretrained(
+            model_id, controlnet=self.controlnet, torch_dtype=torch.float16
+        )
         
-        # Enable VRAM optimizations when running on GPU
-        if self.device == "cuda":
-            print("[INFO] Enabling attention slicing for VRAM optimization.")
-            self.pipe.enable_attention_slicing()
-
-    def generate_canny_map(self, image: Image.Image, low_threshold: int = 100, high_threshold: int = 200) -> Image.Image:
-        """
-        Extract Canny edges from an input PIL image to serve as ControlNet structural condition.
-        """
-        image_np = np.array(image.convert("RGB"))
-        canny_edges = cv2.Canny(image_np, low_threshold, high_threshold)
-        canny_3channel = np.stack([canny_edges] * 3, axis=-1)
-        return Image.fromarray(canny_3channel)
+        # 3. Optimize scheduler for faster, high-quality generation
+        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
+        
+        # 4. Move to GPU (or CPU offload if VRAM is tight)
+        self.pipe.to(device)
+        
+        # Optional VRAM optimization (uncomment if you get CUDA OOM)
+        # self.pipe.enable_model_cpu_offload()
 
     def predict(
-        self, 
-        image: Image.Image, 
-        mask_image: Image.Image, 
-        prompt: str, 
-        negative_prompt: str = "blurry, low quality, distorted, extra limbs, bad anatomy",
-        num_inference_steps: int = 30,
+        self,
+        image: Image.Image,
+        mask_image: Image.Image,
+        control_image: Image.Image, # For Canny Corner Mapping Algorithm
+        prompt: str,
+        negative_prompt: str = "",
+        controlnet_conditioning_scale: float = 0.5,
+        strength: float = 1.0,
         guidance_scale: float = 7.5,
-        controlnet_conditioning_scale: float = 1.0
+        num_inference_steps: int = 50,
+        seed: int = -1
     ) -> Image.Image:
         """
-        Executes the inpainting pipeline with spatial edge guidance.
-
-        Parameters:
-            image (PIL.Image): Original base image.
-            mask_image (PIL.Image): Inpainting mask (White = regenerate, Black = preserve).
-            prompt (str): Text describing the intended completion/generation.
-            negative_prompt (str): Text describing unwanted artifacts or features.
-            num_inference_steps (int): Total diffusion denoising steps.
-            guidance_scale (float): Classifier-free guidance scale.
-            controlnet_conditioning_scale (float): Weight of the ControlNet edge influence.
+        Executes the diffusion inpainting process with ControlNet guidance.
         """
-        print(f"[INFO] Processing image generation with prompt: '{prompt}'")
-        
-        # Extract edge map from input image for structural guidance
-        control_image = self.generate_canny_map(image)
+        print("[INFO] Generating image...")
 
-        # Run Latent Diffusion inference
+        # Setup generator for reproducibility if needed
+        if seed != -1:
+            generator = torch.Generator(device=self.device).manual_seed(seed)
+        else:
+            generator = None
+
+        # Execute pipeline
         output = self.pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
-            image=image,
-            mask_image=mask_image,
-            control_image=control_image,
-            num_inference_steps=num_inference_steps,
+            image=image, # Padded/expanded base image
+            mask_image=mask_image, # Gaussian blurred mask
+            control_image=control_image, # ControlNet input
+            controlnet_conditioning_scale=controlnet_conditioning_scale, # ControlNet influence
+            strength=strength,
             guidance_scale=guidance_scale,
-            controlnet_conditioning_scale=controlnet_conditioning_scale
-        ).images[0]
+            num_inference_steps=num_inference_steps,
+            generator=generator
+        )
 
-        print("[INFO] Inference complete successfully.")
-        return output
-
-if __name__ == "__main__":
-    # Self-test block for pipeline verification
-    print("[INFO] Running pipeline verification test...")
-    inpainter = SDControlNetInpainter()
-    print("[INFO] Pipeline initialized ready for commits.")
+        return output.images[0]

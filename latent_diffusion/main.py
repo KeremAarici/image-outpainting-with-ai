@@ -1,49 +1,71 @@
 import os
 from PIL import Image
+# Bizim yazdığımız yerel modüller (aynı klasörde oldukları için doğrudan import ediyoruz)
 from sd_inpainter import SDControlNetInpainter
 from image_processor import ImageProcessor
 
 def main():
-    print("[INFO] Starting outpainting pipeline execution...")
     
-    # Load sample input image (ensure you have a test image in your workspace)
-    input_image_path = "input.jpg"
+    
+    input_image_path = "../input.jpg" 
+    output_image_path = "output_outpainted.png"
+    device = "cuda" # For NVIDIA GPU Usage
+    
+    
     if not os.path.exists(input_image_path):
-        print(f"[WARNING] '{input_image_path}' not found. Please place a sample image in the directory.")
+        print(f"[Error] Input image not found: {input_image_path}")
+        print("Please place an image named 'input.jpg' in the project's root directory.")
         return
 
-    base_image = Image.open(input_image_path).convert("RGB")
-    
-    # Define padding configuration for outpainting (e.g., expand canvas by 128 pixels on each side)
-    padding_config = {
-        'top': 128,
-        'bottom': 128,
-        'left': 128,
-        'right': 128
+    print("[INFO] Models starting...")
+    processor = ImageProcessor()
+    inpainter = SDControlNetInpainter(device=device)
+
+    print("[INFO] images downloading")
+    init_image = Image.open(input_image_path).convert("RGB")
+
+    padding = {
+        "top": 256,
+        "bottom": 256,
+        "left": 256,
+        "right": 256
     }
+
+    expanded_image, mask_image = processor.create_outpainting_mask(init_image, padding)
+
     
-    print("[INFO] Expanding canvas and generating mask...")
-    expanded_image, mask_image = ImageProcessor.create_outpainting_mask(base_image, padding_config)
+    print("[INFO] Canny kenar haritası oluşturuluyor (boundary-safe)...")
+    canny_image = processor.extract_canny_edges(init_image, padding)
+
+    # (Opsiyonel) Ara aşamaları kaydetmek isterseniz:
+    mask_image.save("debug_mask.png")
+    canny_image.save("debug_canny.png")
+
+    # Production Param.
+    # Spesific Promt For Your Image. You have to cahnge here if you want to use a different input image
+    prompt = "tropical island beach, seamless clear turquoise ocean, bright blue sky with light clouds, high resolution, photorealistic"
+    negative_prompt = "blurry, dark, rocks, brown soil, frame, borders, sharp lines, low quality, text, watermark, canvas border"
     
-    # Initialize the inpainting pipeline
-    inpainter = SDControlNetInpainter()
+    # Inference (Production)
+    print("[INFO] Diffusion is starting.")
     
-    # Define text prompt for the outpainted regions
-    prompt = "a photorealistic continuation of the scene, highly detailed, 4k resolution"
-    negative_prompt = "blurry, low quality, distortion, artifacts"
-    
-    print("[INFO] Running diffusion inference...")
+    # strength=1.0, causes the masked area to be completely redrawn.
     result_image = inpainter.predict(
         image=expanded_image,
         mask_image=mask_image,
+        control_image=canny_image,
         prompt=prompt,
-        negative_prompt=negative_prompt
+        negative_prompt=negative_prompt,
+        controlnet_conditioning_scale=0.4,
+        strength=1.0,
+        guidance_scale=7.5,
+        num_inference_steps=50
     )
-    
-    # Save output result
-    output_path = "output_outpainted.png"
-    result_image.save(output_path)
-    print(f"[INFO] Outpainting successful! Saved result to {output_path}")
+
+    # Save
+    print(f"[INFO] Sonuç kaydediliyor: {output_image_path}")
+    result_image.save(output_image_path)
+    print("[INFO] İşlem başarıyla tamamlandı.")
 
 if __name__ == "__main__":
     main()

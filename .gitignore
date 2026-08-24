@@ -6,3 +6,9 @@ checkpoints/
 samples/
 *.jpg
 *.png
+*.jpeg
+*.webp
+input.jpg
+output_outpainted.png
+debug_mask.png
+debug_canny.png
